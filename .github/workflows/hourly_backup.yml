@@ -70,6 +70,7 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Stage dashboard files
         run: git add dashboards/
+        # Stages dashboard JSONs, _index.json version caches, and any deleted files (renames).
 
       # -----------------------------------------------------------------------
       # 6. Commit and push — only if the staged tree has actually changed.

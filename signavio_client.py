@@ -218,15 +218,16 @@ class SignavioClient:
         ]
 
     def get_dashboards(self, process_id: str) -> list[dict]:
-        """Return [{id, name, owner}] for every dashboard of a process."""
+        """Return [{id, name, version, owner}] for every dashboard of a process."""
         body = self._load_graphql("get_dashboards.json")
         body["variables"]["subjectId"] = process_id
         result = self._execute_graphql(body)
         return [
             {
-                "id":    d["id"],
-                "name":  d["name"],
-                "owner": d.get("owner"),   # {id, firstName, lastName} or None
+                "id":      d["id"],
+                "name":    d["name"],
+                "version": d.get("version"),  # hash that changes on every save
+                "owner":   d.get("owner"),    # {id, firstName, lastName} or None
             }
             for d in result.get("data", {}).get("dashboards", [])
         ]

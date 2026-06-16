@@ -10,7 +10,14 @@ Real API data flow (two-level hierarchy):
 Output structure:
     dashboards/
     └── <ProcessName>__<ProcessID>/
+        ├── _index.json                      ← version cache (not a dashboard)
         └── db_<ID>__<DashboardName>.json
+
+Version-based optimization:
+    The GraphQL listing returns a `version` hash per dashboard that changes on
+    every save. The script caches these hashes in _index.json. On each run it
+    compares the live version against the cache — only dashboards whose version
+    changed (or are new) trigger the expensive REST export call.
 
 Environment variables required:
     SIGNAVIO_HOST          — Regional base URL, e.g. https://editor.signavio.com
@@ -33,6 +40,7 @@ from signavio_client import SignavioAuthError, SignavioAPIError, SignavioClient
 
 DASHBOARDS_DIR   = Path("dashboards")
 COMMIT_MSG_FILE  = Path("commit_message.txt")
+INDEX_FILENAME   = "_index.json"
 
 # ---------------------------------------------------------------------------
 # Name sanitization
@@ -47,8 +55,8 @@ def _sanitize(name: str, max_len: int = 60) -> str:
         "Sales & Operations 2024"  → "Sales_Operations_2024"
         "KPIs — Q1/Q2"             → "KPIs_Q1_Q2"
     """
-    safe = re.sub(r"[^\w-]", "_", name)        # keep word chars + hyphens
-    safe = re.sub(r"_+", "_", safe).strip("_") # collapse runs, strip edges
+    safe = re.sub(r"[^\w-]", "_", name)
+    safe = re.sub(r"_+", "_", safe).strip("_")
     return safe[:max_len] or "unnamed"
 
 # ---------------------------------------------------------------------------
@@ -105,18 +113,51 @@ def save_dashboard(path: Path, definition: dict) -> None:
     )
 
 # ---------------------------------------------------------------------------
+# Version index  (_index.json per process folder)
+# ---------------------------------------------------------------------------
+
+def index_path(process_name: str, process_id: str) -> Path:
+    return process_folder(process_name, process_id) / INDEX_FILENAME
+
+
+def load_index(process_name: str, process_id: str) -> dict:
+    """Load the cached version index for a process folder. Returns {} if missing."""
+    path = index_path(process_name, process_id)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_index(process_name: str, process_id: str, index: dict) -> None:
+    """Persist the version index for a process folder."""
+    path = index_path(process_name, process_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(index, indent=2, ensure_ascii=False), encoding="utf-8")
+
+# ---------------------------------------------------------------------------
 # Commit message
 # ---------------------------------------------------------------------------
 
-def write_commit_message(updated: list[str], skipped: int, total: int) -> None:
+def write_commit_message(updated: list[str], skipped: int, skipped_export: int, total: int) -> None:
     """Write commit_message.txt summarising this backup cycle."""
     if not updated:
         subject = "chore: backup cycle — no dashboard changes detected"
-        body    = f"Checked {total} dashboard(s) across all processes; {skipped} unchanged."
+        body    = (
+            f"Checked {total} dashboard(s) across all processes; "
+            f"{skipped} unchanged (version match), "
+            f"{skipped_export} skipped (export error)."
+        )
     else:
         noun    = "dashboard" if len(updated) == 1 else "dashboards"
         subject = f"chore: backup {len(updated)} {noun} ({total} total checked)"
-        body    = "\n".join(updated) + f"\n\n{skipped} dashboard(s) unchanged."
+        body    = "\n".join(updated)
+        body   += (
+            f"\n\n{skipped} dashboard(s) unchanged (version match), "
+            f"{skipped_export} skipped (export error)."
+        )
 
     COMMIT_MSG_FILE.write_text(f"{subject}\n\n{body}\n", encoding="utf-8")
 
@@ -162,9 +203,11 @@ def run_backup() -> None:
         sys.exit(1)
     print(f"[INFO] Found {len(processes)} process(es).")
 
-    updated: list[str] = []   # lines for commit_message.txt
-    skipped  = 0
-    total    = 0
+    updated:        list[str] = []
+    skipped         = 0   # version matched — no export needed
+    skipped_export  = 0   # export call failed
+
+    total = 0
 
     for process in processes:
         proc_id   = process["id"]
@@ -177,40 +220,62 @@ def run_backup() -> None:
             print(f"[WARN] Could not fetch dashboards for '{proc_name}': {exc}", file=sys.stderr)
             continue
 
-        for db in dashboards:
-            db_id    = db["id"]
-            db_name  = db["name"]
-            owner    = db.get("owner")
-            total   += 1
+        # Load the cached version index for this process folder once.
+        version_index = load_index(proc_name, proc_id)
+        index_dirty   = False   # track whether we need to save the index
 
-            # Fetch the full dashboard definition via the REST export endpoint.
+        for db in dashboards:
+            db_id      = db["id"]
+            db_name    = db["name"]
+            db_version = db.get("version")
+            owner      = db.get("owner")
+            total     += 1
+
+            # --- Version check: skip export if unchanged -------------------
+            if db_version and version_index.get(db_id) == db_version:
+                skipped += 1
+                print(f"[INFO] Skipped (unchanged) '{db_name}' (id={db_id})")
+                continue
+
+            # --- Fetch full definition only when version changed -----------
             try:
                 definition = client.export_dashboard(db_id)
             except SignavioAPIError as exc:
                 print(f"[WARN] Export failed for '{db_name}' (id={db_id}): {exc}", file=sys.stderr)
-                skipped += 1
+                skipped_export += 1
                 continue
 
-            # Resolve the target path (new name) and any existing file (may have old name).
+            # Resolve target path and detect renames.
             new_path      = dashboard_path(proc_name, proc_id, db_id, db_name)
             existing_path = find_existing_file(proc_name, proc_id, db_id)
             existing      = load_existing(existing_path) if existing_path else None
 
+            # Secondary content check: version changed but content identical
+            # (can happen if the API updates the version hash on non-visual saves).
             if existing == definition:
                 skipped += 1
+                # Still update the index so we skip the export next time.
+                if db_version:
+                    version_index[db_id] = db_version
+                    index_dirty = True
                 continue
 
-            # Determine action label for the commit message.
+            # Determine action label.
             if existing_path is None:
                 action = "added"
             elif existing_path != new_path:
                 action = "renamed"
-                existing_path.unlink()   # remove old filename; git will see delete + add
+                existing_path.unlink()
                 print(f"[INFO] Renamed: {existing_path.name} → {new_path.name}")
             else:
                 action = "updated"
 
             save_dashboard(new_path, definition)
+
+            # Update version index entry.
+            if db_version:
+                version_index[db_id] = db_version
+                index_dirty = True
 
             owner_label = SignavioClient.owner_label(owner)
             line = (
@@ -220,16 +285,32 @@ def run_backup() -> None:
             updated.append(line)
             print(f"[INFO] {line.strip()}")
 
-    # ---- Write commit message (always; workflow decides whether to commit) -
-    write_commit_message(updated, skipped, total)
+        # Persist the index if anything changed this cycle.
+        if index_dirty:
+            save_index(proc_name, proc_id, version_index)
+
+    # ---- Write commit message ---------------------------------------------
+    write_commit_message(updated, skipped, skipped_export, total)
 
     if updated:
         print(
-            f"[INFO] {len(updated)} dashboard(s) changed out of {total} checked. "
-            f"Commit message written."
+            f"[INFO] {len(updated)} dashboard(s) changed out of {total} checked "
+            f"({skipped} skipped via version cache). Commit message written."
         )
     else:
-        print(f"[INFO] No changes in {total} dashboard(s). Nothing to commit.")
+        print(
+            f"[INFO] No changes in {total} dashboard(s) "
+            f"({skipped} skipped via version cache). Nothing to commit."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    run_backup()
+
 
 
 # ---------------------------------------------------------------------------
