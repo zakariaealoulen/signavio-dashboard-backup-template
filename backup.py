@@ -9,7 +9,7 @@ Real API data flow (two-level hierarchy):
 
 Output structure:
     dashboards/
-    └── <ProcessName>/
+    └── <ProcessName>__<ProcessID>/
         └── db_<ID>__<DashboardName>.json
 
 Environment variables required:
@@ -55,31 +55,31 @@ def _sanitize(name: str, max_len: int = 60) -> str:
 # File helpers
 # ---------------------------------------------------------------------------
 
-def process_folder(process_name: str) -> Path:
-    """Return the folder path for a process: dashboards/<SanitizedProcessName>/"""
-    return DASHBOARDS_DIR / _sanitize(process_name)
+def process_folder(process_name: str, process_id: str) -> Path:
+    """Return the folder path for a process: dashboards/<SanitizedProcessName>__<ProcessID>/
+
+    The process ID suffix guarantees uniqueness when two processes share the same display name.
+    """
+    return DASHBOARDS_DIR / f"{_sanitize(process_name)}__{process_id}"
 
 
-def dashboard_path(process_name: str, dashboard_id: str, dashboard_name: str) -> Path:
+def dashboard_path(process_name: str, process_id: str, dashboard_id: str, dashboard_name: str) -> Path:
     """Return the full file path for a dashboard.
 
-    Format: dashboards/<ProcessName>/db_<ID>__<DashboardName>.json
-    The ID prefix guarantees stability; the name suffix provides readability.
+    Format: dashboards/<ProcessName>__<ProcessID>/db_<ID>__<DashboardName>.json
     """
-    folder    = process_folder(process_name)
-    filename  = f"db_{dashboard_id}__{_sanitize(dashboard_name)}.json"
+    folder   = process_folder(process_name, process_id)
+    filename = f"db_{dashboard_id}__{_sanitize(dashboard_name)}.json"
     return folder / filename
 
 
-def find_existing_file(process_name: str, dashboard_id: str) -> Path | None:
+def find_existing_file(process_name: str, process_id: str, dashboard_id: str) -> Path | None:
     """Locate an existing file for this dashboard ID in the process folder.
 
-    Handles renames: if the dashboard was renamed in the UI, the file on disk
-    still starts with db_<id>__ but has the old name. Returns the old path so
-    the caller can delete it before writing the new one.
+    Handles renames: finds db_<id>__*.json regardless of the current name suffix.
     Returns None if no file exists yet for this ID.
     """
-    folder = process_folder(process_name)
+    folder = process_folder(process_name, process_id)
     if not folder.exists():
         return None
     matches = list(folder.glob(f"db_{dashboard_id}__*.json"))
@@ -192,8 +192,8 @@ def run_backup() -> None:
                 continue
 
             # Resolve the target path (new name) and any existing file (may have old name).
-            new_path      = dashboard_path(proc_name, db_id, db_name)
-            existing_path = find_existing_file(proc_name, db_id)
+            new_path      = dashboard_path(proc_name, proc_id, db_id, db_name)
+            existing_path = find_existing_file(proc_name, proc_id, db_id)
             existing      = load_existing(existing_path) if existing_path else None
 
             if existing == definition:
