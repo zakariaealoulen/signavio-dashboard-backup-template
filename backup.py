@@ -221,8 +221,9 @@ def run_backup() -> None:
             continue
 
         # Load the cached version index for this process folder once.
-        version_index = load_index(proc_name, proc_id)
-        index_dirty   = False   # track whether we need to save the index
+        version_index  = load_index(proc_name, proc_id)
+        index_dirty    = False   # version hash updated (may include no-content-change cases)
+        files_written  = False   # a dashboard JSON was actually written to disk
 
         for db in dashboards:
             db_id      = db["id"]
@@ -250,11 +251,12 @@ def run_backup() -> None:
             existing_path = find_existing_file(proc_name, proc_id, db_id)
             existing      = load_existing(existing_path) if existing_path else None
 
-            # Secondary content check: version changed but content identical
-            # (can happen if the API updates the version hash on non-visual saves).
+            # Secondary content check: version changed but exported content is identical
+            # (can happen if the API bumps the version hash on non-visual saves).
             if existing == definition:
                 skipped += 1
-                # Still update the index so we skip the export next time.
+                # Update the index so we skip the export next time, but do NOT
+                # mark this as a dashboard change — the file on disk is untouched.
                 if db_version:
                     version_index[db_id] = db_version
                     index_dirty = True
@@ -271,6 +273,7 @@ def run_backup() -> None:
                 action = "updated"
 
             save_dashboard(new_path, definition)
+            files_written = True
 
             # Update version index entry.
             if db_version:
@@ -285,8 +288,11 @@ def run_backup() -> None:
             updated.append(line)
             print(f"[INFO] {line.strip()}")
 
-        # Persist the index if anything changed this cycle.
-        if index_dirty:
+        # Only persist the index when dashboard files were actually written.
+        # This prevents a standalone _index.json commit with a misleading
+        # "no changes detected" message when only the version hash changed
+        # but the exported content was identical.
+        if index_dirty and files_written:
             save_index(proc_name, proc_id, version_index)
 
     # ---- Write commit message ---------------------------------------------
