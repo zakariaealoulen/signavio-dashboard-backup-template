@@ -1,0 +1,91 @@
+# .github/workflows/hourly_backup.yml
+#
+# Hourly GitOps backup of Analytics workspace dashboards.
+#
+# Schedule note — Paris time (CET/CEST):
+#   Paris is UTC+1 in winter (CET) and UTC+2 in summer (CEST).
+#   To guarantee coverage of 08:00–18:00 Paris in both seasons we anchor
+#   on CEST (the later-starting window): UTC 06:00–16:00.
+#   In winter this means the pipeline starts at 07:00 Paris rather than
+#   08:00, which is an acceptable early-start trade-off versus missing the
+#   08:00 slot entirely during summer.
+#
+#   Cron fields: minute hour dom month dow
+#   "0 6-16 * * 1-5"  → top of each hour, 06:00–16:00 UTC, Mon–Fri
+
+name: Hourly Analytics Dashboard Backup
+
+on:
+  schedule:
+    - cron: "0 6-16 * * 1-5"   # Mon–Fri, 06:00–16:00 UTC (08:00–18:00 CEST)
+  workflow_dispatch:            # Allow manual trigger from the Actions UI
+
+# Explicit least-privilege permissions: only contents:write is required.
+permissions:
+  contents: write
+
+jobs:
+  backup:
+    name: Backup Dashboards
+    runs-on: ubuntu-latest
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Check out the repository (full history so git diff works correctly)
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history; avoids shallow-clone issues with git diff
+
+      # -----------------------------------------------------------------------
+      # 2. Set up Python
+      # -----------------------------------------------------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # -----------------------------------------------------------------------
+      # 3. Install dependencies
+      # -----------------------------------------------------------------------
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # -----------------------------------------------------------------------
+      # 4. Run backup script
+      #    The secret is injected as an env var — never logged or echoed.
+      # -----------------------------------------------------------------------
+      - name: Run backup.py
+        env:
+          SIGNAVIO_HOST:         ${{ vars.SIGNAVIO_HOST }}
+          SIGNAVIO_EMAIL:        ${{ vars.SIGNAVIO_EMAIL }}
+          SIGNAVIO_PASSWORD:     ${{ secrets.SIGNAVIO_PASSWORD }}
+          SIGNAVIO_WORKSPACE_ID: ${{ vars.SIGNAVIO_WORKSPACE_ID }}
+        run: python backup.py
+
+      # -----------------------------------------------------------------------
+      # 5. Stage only the dashboard JSON files (never stage secrets or logs)
+      # -----------------------------------------------------------------------
+      - name: Stage dashboard files
+        run: git add dashboards/
+
+      # -----------------------------------------------------------------------
+      # 6. Commit and push — only if the staged tree has actually changed.
+      #    git diff --staged --quiet exits 0 (no diff) or 1 (diff found).
+      # -----------------------------------------------------------------------
+      - name: Commit and push changes
+        run: |
+          # Configure the Git identity for the automated commit.
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --staged --quiet; then
+            echo "No dashboard changes detected — skipping commit."
+          else
+            # Use the dynamic message produced by backup.py.
+            git commit --file=commit_message.txt
+            git push
+            echo "Changes committed and pushed successfully."
+          fi

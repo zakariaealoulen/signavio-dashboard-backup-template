@@ -1,0 +1,5 @@
+{
+  "operationName": "Subjects",
+  "variables": {},
+  "query": "query Subjects {\n  subjects {\n    id\n    name\n    businessArea\n    preprocessingStatus\n    investigationCount\n    dashboardCount\n    changedAt\n    __typename\n  }\n}\n"
+}

@@ -1,0 +1,7 @@
+{
+    "operationName": "Dashboards",
+    "variables": {
+        "subjectId": ""
+    },
+    "query": "query Dashboards($subjectId: ID!) {\n  dashboards(subjectId: $subjectId) {\n    access\n    id\n    name\n    view {\n      name\n      id\n      isDefaultView\n      __typename\n    }\n    owner {\n      id\n      firstName\n      lastName\n      __typename\n    }\n    __typename\n  }\n}\n"
+}
