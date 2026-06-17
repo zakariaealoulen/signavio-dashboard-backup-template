@@ -16,9 +16,12 @@
 name: Hourly Analytics Dashboard Backup
 
 on:
-  schedule:
-    - cron: "0 6-16 * * 1-5"   # Mon–Fri, 06:00–16:00 UTC (08:00–18:00 CEST)
-  workflow_dispatch:            # Allow manual trigger from the Actions UI
+  # Schedule removed — timing is handled by SAP BTP Job Scheduling Service,
+  # which calls the GitHub workflow_dispatch endpoint on a reliable enterprise cron.
+  # To re-enable GitHub cron as fallback: uncomment the lines below.
+  # schedule:
+  #   - cron: "0 6-16 * * 1-5"   # Mon–Fri, 06:00–16:00 UTC (08:00–18:00 CEST)
+  workflow_dispatch:            # Manual trigger + SAP BTP Job Scheduling Service trigger
 
 # Explicit least-privilege permissions: only contents:write is required.
 permissions:
