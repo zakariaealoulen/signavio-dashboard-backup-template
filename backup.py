@@ -24,6 +24,10 @@ Environment variables required:
     SIGNAVIO_EMAIL         — Service-account email address
     SIGNAVIO_PASSWORD      — Service-account password  (stored as a GitHub secret)
     SIGNAVIO_WORKSPACE_ID  — Workspace / tenant ID to back up
+
+Optional:
+    SIGNAVIO_PROCESS_IDS   — Comma-separated process IDs to back up (e.g. "abc123,def456").
+                             If absent or set to "ALL", all processes are backed up.
 """
 
 import json
@@ -202,6 +206,13 @@ def run_backup() -> None:
         print(f"[ERROR] Could not fetch processes: {exc}", file=sys.stderr)
         sys.exit(1)
     print(f"[INFO] Found {len(processes)} process(es).")
+
+    # Filter to selected processes if SIGNAVIO_PROCESS_IDS is set
+    process_ids_filter = os.environ.get("SIGNAVIO_PROCESS_IDS", "").strip()
+    if process_ids_filter and process_ids_filter.upper() != "ALL":
+        allowed = set(process_ids_filter.split(","))
+        processes = [p for p in processes if p["id"] in allowed]
+        print(f"[INFO] Filtered to {len(processes)} process(es) by SIGNAVIO_PROCESS_IDS.")
 
     updated:        list[str] = []
     skipped         = 0   # version matched — no export needed
