@@ -68,6 +68,7 @@ jobs:
           SIGNAVIO_EMAIL:        ${{ vars.SIGNAVIO_EMAIL }}
           SIGNAVIO_PASSWORD:     ${{ secrets.SIGNAVIO_PASSWORD }}
           SIGNAVIO_WORKSPACE_ID: ${{ vars.SIGNAVIO_WORKSPACE_ID }}
+          SIGNAVIO_PROCESS_IDS: ${{ vars.SIGNAVIO_PROCESS_IDS }}
         run: python backup.py
 
       # -----------------------------------------------------------------------
