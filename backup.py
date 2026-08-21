@@ -34,6 +34,7 @@ import json
 import os
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 from signavio_client import SignavioAuthError, SignavioAPIError, SignavioClient
@@ -75,13 +76,18 @@ def process_folder(process_name: str, process_id: str) -> Path:
     return DASHBOARDS_DIR / f"{_sanitize(process_name)}__{process_id}"
 
 
-def dashboard_path(process_name: str, process_id: str, dashboard_id: str, dashboard_name: str) -> Path:
+def dashboard_path(process_name: str, process_id: str, dashboard_id: str, dashboard_name: str, use_id: bool = True) -> Path:
     """Return the full file path for a dashboard.
 
-    Format: dashboards/<ProcessName>__<ProcessID>/db_<ID>__<DashboardName>.json
+    When use_id is True:  db_<ID>__<DashboardName>.json  (duplicate names within a process)
+    When use_id is False: <DashboardName>.json            (name is unique within the process)
     """
     folder   = process_folder(process_name, process_id)
-    filename = f"db_{dashboard_id}__{_sanitize(dashboard_name)}.json"
+    filename = (
+        f"db_{dashboard_id}__{_sanitize(dashboard_name)}.json"
+        if use_id
+        else f"{_sanitize(dashboard_name)}.json"
+    )
     return folder / filename
 
 
@@ -236,12 +242,16 @@ def run_backup() -> None:
         index_dirty    = False   # version hash updated (may include no-content-change cases)
         files_written  = False   # a dashboard JSON was actually written to disk
 
+        # Determine which dashboard names are duplicated within this process.
+        name_counts = Counter(_sanitize(db["name"]) for db in dashboards)
+
         for db in dashboards:
             db_id      = db["id"]
             db_name    = db["name"]
             db_version = db.get("version")
             owner      = db.get("owner")
             total     += 1
+            use_id     = name_counts[_sanitize(db_name)] > 1
 
             # --- Version check: skip export if unchanged -------------------
             if db_version and version_index.get(db_id) == db_version:
@@ -258,7 +268,7 @@ def run_backup() -> None:
                 continue
 
             # Resolve target path and detect renames.
-            new_path      = dashboard_path(proc_name, proc_id, db_id, db_name)
+            new_path      = dashboard_path(proc_name, proc_id, db_id, db_name, use_id)
             existing_path = find_existing_file(proc_name, proc_id, db_id)
             existing      = load_existing(existing_path) if existing_path else None
 
