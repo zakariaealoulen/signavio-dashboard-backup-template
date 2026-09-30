@@ -79,12 +79,12 @@ def process_folder(process_name: str, process_id: str) -> Path:
 def dashboard_path(process_name: str, process_id: str, dashboard_id: str, dashboard_name: str, use_id: bool = True) -> Path:
     """Return the full file path for a dashboard.
 
-    When use_id is True:  db_<ID>__<DashboardName>.json  (duplicate names within a process)
-    When use_id is False: <DashboardName>.json            (name is unique within the process)
+    When use_id is True:  <DashboardName>__<ID>.json  (duplicate names within a process)
+    When use_id is False: <DashboardName>.json         (name is unique within the process)
     """
     folder   = process_folder(process_name, process_id)
     filename = (
-        f"db_{dashboard_id}__{_sanitize(dashboard_name)}.json"
+        f"{_sanitize(dashboard_name)}__{dashboard_id}.json"
         if use_id
         else f"{_sanitize(dashboard_name)}.json"
     )
@@ -94,13 +94,16 @@ def dashboard_path(process_name: str, process_id: str, dashboard_id: str, dashbo
 def find_existing_file(process_name: str, process_id: str, dashboard_id: str) -> Path | None:
     """Locate an existing file for this dashboard ID in the process folder.
 
-    Handles renames: finds db_<id>__*.json regardless of the current name suffix.
+    Handles renames: finds both <name>__<id>.json and legacy db_<id>__<name>.json patterns.
     Returns None if no file exists yet for this ID.
     """
     folder = process_folder(process_name, process_id)
     if not folder.exists():
         return None
-    matches = list(folder.glob(f"db_{dashboard_id}__*.json"))
+    matches = (
+        list(folder.glob(f"*__{dashboard_id}.json")) +
+        list(folder.glob(f"db_{dashboard_id}__*.json"))
+    )
     return matches[0] if matches else None
 
 
@@ -309,11 +312,11 @@ def run_backup() -> None:
             updated.append(line)
             print(f"[INFO] {line.strip()}")
 
-        # Only persist the index when dashboard files were actually written.
-        # This prevents a standalone _index.json commit with a misleading
-        # "no changes detected" message when only the version hash changed
-        # but the exported content was identical.
-        if index_dirty and files_written:
+        # Always persist the index when version hashes changed, even if no
+        # dashboard files were written (content-identical exports). Without this,
+        # the cache is never saved and every run re-exports all dashboards from
+        # scratch because the version check always misses.
+        if index_dirty:
             save_index(proc_name, proc_id, version_index)
 
     # ---- Write commit message ---------------------------------------------
